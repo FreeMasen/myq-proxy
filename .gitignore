@@ -1,1 +1,6 @@
 /target
+/myq
+/*.json
+/*.log
+/.vscode
+/*.js
