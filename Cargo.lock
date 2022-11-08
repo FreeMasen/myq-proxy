@@ -707,6 +707,7 @@ dependencies = [
 name = "myq-proxy"
 version = "0.1.0"
 dependencies = [
+ "base64 0.13.1",
  "env_logger",
  "html5ever",
  "pkce",
