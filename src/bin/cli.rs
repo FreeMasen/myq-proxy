@@ -1,4 +1,4 @@
-use std::time::{Duration};
+use std::time::Duration;
 
 use myq_proxy::{Config, DeviceStateActor};
 use serde_json::Value;
@@ -18,6 +18,8 @@ async fn main() {
     handle.spawn_refresh_task(Duration::from_secs(2));
 
     tokio::task::spawn(async move {
+        let devices = dbg!(handle.get_devices().await.unwrap());
+        handle.toggle_device("CG080057D933".into()).await.unwrap();
         let mut rx = handle.subscribe().await.unwrap();
         while let Ok(change) = rx.recv().await {
             println!("{change:#?}");

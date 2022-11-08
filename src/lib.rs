@@ -6,10 +6,10 @@ use std::{
 use reqwest::{
     header::{HeaderMap, HeaderValue, InvalidHeaderValue},
     redirect::Policy,
-    Client, RequestBuilder, Response, Url,
+    Client, Response, Url,
 };
 use scraper::Selector;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;
@@ -54,6 +54,43 @@ pub enum DeviceType {
     GarageDoor(GarageDoorState),
 }
 
+impl DeviceType {
+    fn toggle(self) -> Self {
+        match self {
+            Self::Lamp(state) => Self::Lamp(match state {
+                LampState::On => LampState::Off,
+                LampState::Off => LampState::On,
+            }),
+            Self::GarageDoor(state) => Self::GarageDoor(match state {
+                GarageDoorState::Open => GarageDoorState::Closed,
+                GarageDoorState::Opening => GarageDoorState::Closed,
+                GarageDoorState::Closed => GarageDoorState::Open,
+                GarageDoorState::Closing => GarageDoorState::Open,
+            }),
+        }
+    }
+    pub fn lower_str(&self) -> &'static str {
+        match self {
+            Self::Lamp(state) => state.lower_str(),
+            Self::GarageDoor(state) => state.lower_str(),
+        }
+    }
+    pub fn url_base(&self) -> &'static str {
+        match self {
+            DeviceType::Lamp(_) => "https://account-devices-lamp.myq-cloud.com/api/v5.2/Accounts",
+            DeviceType::GarageDoor(_) => {
+                "https://account-devices-gdo.myq-cloud.com/api/v5.2/Accounts"
+            }
+        }
+    }
+    pub fn url_segment(&self) -> &'static str {
+        match self {
+            DeviceType::Lamp(_) => "lamps",
+            DeviceType::GarageDoor(_) => "door_openers",
+        }
+    }
+}
+
 pub struct DeviceStateHandle(mpsc::Sender<Request>);
 
 pub enum Request {
@@ -61,6 +98,7 @@ pub enum Request {
     GetDevice(String, Reply<Option<Device>>),
     ForceRefresh(Reply<()>),
     Subscribe(Reply<broadcast::Receiver<StateChange>>),
+    ToggleDevice(String, Reply<()>),
 }
 
 impl DeviceStateActor {
@@ -129,6 +167,10 @@ impl DeviceStateActor {
             Request::Subscribe(reply) => {
                 reply.send(Ok(self.tx.subscribe())).ok();
             }
+            Request::ToggleDevice(id, reply) => {
+                let ret = self.toggle_device(id).await;
+                reply.send(ret).ok();
+            }
         }
     }
 
@@ -180,6 +222,32 @@ impl DeviceStateActor {
         Ok(())
     }
 
+    async fn toggle_device(&self, id: String) -> Result {
+        if let Some(device) = self.devices.get(&id) {
+            if let Some(state) = device.get_type_state() {
+                let to_send = state.toggle();
+                let url = format!(
+                    "{}/{}/{}/{}/{}",
+                    to_send.url_base(),
+                    device.account_id,
+                    to_send.url_segment(),
+                    device.serial_number,
+                    to_send.lower_str()
+                );
+                let resp = self.client
+                    .put(&url)
+                    .bearer_auth(&self.token.access_token)
+                    .header("content-length", "0")
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    log::error!("Error changing state {} {}", resp.status(), resp.text().await.unwrap());
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn send_state_change(&self, ev: StateChange) {
         log::trace!("send_state_change: {ev:?}");
         self.tx
@@ -224,7 +292,7 @@ impl DeviceStateActor {
 impl DeviceStateHandle {
     pub fn spawn_refresh_task(&self, interval: Duration) {
         DeviceStateActor::spawn_refresh_task(self.0.clone(), interval);
-    } 
+    }
     pub async fn get_devices(&self) -> Result<Vec<Device>> {
         let (s, r) = oneshot::channel();
         self.0
@@ -256,6 +324,15 @@ impl DeviceStateHandle {
         let (s, r) = oneshot::channel();
         self.0
             .send(Request::Subscribe(s))
+            .await
+            .map_err(|_| Error::SendFailure)?;
+        let ret = r.await?;
+        ret
+    }
+    pub async fn toggle_device(&self, id: String) -> Result {
+        let (s, r) = oneshot::channel();
+        self.0
+            .send(Request::ToggleDevice(id, s))
             .await
             .map_err(|_| Error::SendFailure)?;
         let ret = r.await?;
@@ -413,12 +490,14 @@ pub async fn refresh_token(existing: &LongLivedToken, client: &Client) -> Result
             HeaderValue::from_maybe_shared("null").unwrap(),
         )
         .send()
-        .await.map_err(|e| {
+        .await
+        .map_err(|e| {
             log::error!("Failed to get response for refresh token {e}");
             e
         })?
         .json()
-        .await.map_err(|e| {
+        .await
+        .map_err(|e| {
             log::error!("Failed to parse json response for refresh token: {e}");
             e
         })?;
@@ -432,13 +511,15 @@ pub async fn get_accounts(client: &Client, token: &LongLivedToken) -> Result<Acc
         .get(URL)
         .bearer_auth(&token.access_token)
         .send()
-        .await.map_err(|e| {
+        .await
+        .map_err(|e| {
             log::error!("Failed to get response for accounts {e}");
             e
         })?
         .error_for_status()?
         .json()
-        .await.map_err(|e| {
+        .await
+        .map_err(|e| {
             log::error!("Failed to parse json response for accounts: {e}");
             e
         })?;
@@ -462,16 +543,18 @@ pub async fn get_devices(
             .get(url)
             .bearer_auth(&token.access_token)
             .send()
-            .await.map_err(|e| {
-            log::error!("Failed to get response for devices {e}");
+            .await
+            .map_err(|e| {
+                log::error!("Failed to get response for devices {e}");
                 e
             })?
             .error_for_status()?
             .json()
-            .await.map_err(|e| {
-            log::error!("Failed to parse json response for devices: {e}");
-            e
-        })?;
+            .await
+            .map_err(|e| {
+                log::error!("Failed to parse json response for devices: {e}");
+                e
+            })?;
         ret.insert(acct.id.clone(), res);
         log::trace!("got devices for account: {}", acct.id);
     }
@@ -694,6 +777,15 @@ pub enum LampState {
     Off,
 }
 
+impl LampState {
+    fn lower_str(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum GarageDoorState {
@@ -701,6 +793,17 @@ pub enum GarageDoorState {
     Opening,
     Closed,
     Closing,
+}
+
+impl GarageDoorState {
+    pub fn lower_str(&self) -> &'static str {
+        match self {
+            GarageDoorState::Open => "open",
+            GarageDoorState::Opening => "opening",
+            GarageDoorState::Closed => "close",
+            GarageDoorState::Closing => "closing",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -723,4 +826,6 @@ pub enum Error {
     OneshotReceive(#[from] oneshot::error::RecvError),
     #[error("Failed to send from handle")]
     SendFailure,
+    #[error("Unknown Device: {0}")]
+    UnknownDevice(String),
 }
