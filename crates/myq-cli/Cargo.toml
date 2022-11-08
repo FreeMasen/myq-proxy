@@ -1,0 +1,13 @@
+[package]
+name = "myq-cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+env_logger = { workspace = true }
+myq-proxy = { path = "../../" }
+serde_json = { workspace = true }
+tokio = { workspace = true }

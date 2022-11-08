@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant, SystemTime}, str::FromStr,
 };
 
 use reqwest::{
@@ -786,6 +786,19 @@ impl LampState {
     }
 }
 
+impl FromStr for LampState {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let ret = match s.trim().to_lowercase().as_str() {
+            "on" => Self::On,
+            "off" => Self::Off,
+            _ => return Err(Error::UnknownState(s.into()))
+        };
+        Ok(ret)
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum GarageDoorState {
@@ -793,6 +806,18 @@ pub enum GarageDoorState {
     Opening,
     Closed,
     Closing,
+}
+
+impl FromStr for GarageDoorState {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
+        let ret = match s.trim().to_lowercase().as_str() {
+            "open" | "opened" | "opening" => Self::Open,
+            "close" | "closed" | "closing" => Self::Closed,
+            _ => return Err(Error::UnknownState(s.to_string()))
+        };
+        return Ok(ret);
+    }
 }
 
 impl GarageDoorState {
@@ -828,4 +853,6 @@ pub enum Error {
     SendFailure,
     #[error("Unknown Device: {0}")]
     UnknownDevice(String),
+    #[error("Unknown State: {0}")]
+    UnknownState(String),
 }
