@@ -1,6 +1,6 @@
-use std::time::{Duration, SystemTime};
+use std::time::{Duration};
 
-use myq_proxy::Config;
+use myq_proxy::{Config, DeviceStateActor};
 use serde_json::Value;
 
 #[tokio::main]
@@ -14,34 +14,14 @@ async fn main() {
             e
         })
         .unwrap();
-    let client = myq_proxy::build_client().unwrap();
-    let mut login = myq_proxy::login(&client, &config).await.unwrap();
-    // println!("{login:#?}");
-    let accounts = myq_proxy::get_accounts(&client, &login).await.unwrap();
-    // println!("{accounts:#?}");
-    loop {
-        if login.has_expired()
-            || login
-                .expires_at
-                .duration_since(SystemTime::now())
-                .map(|d| d < Duration::from_secs(7))
-                .unwrap_or(true)
-        {
-            login = myq_proxy::login(&client, &config).await.unwrap();
+    let (actor, handle) = DeviceStateActor::new(config);
+    handle.spawn_refresh_task(Duration::from_secs(2));
+
+    tokio::task::spawn(async move {
+        let mut rx = handle.subscribe().await.unwrap();
+        while let Ok(change) = rx.recv().await {
+            println!("{change:#?}");
         }
-        let device_lists = myq_proxy::get_devices(&client, &login, &accounts)
-            .await
-            .unwrap();
-        for (_acct, devices) in device_lists {
-            if devices.items.is_empty() {
-                continue;
-            }
-            for device in devices.items {
-                if let Some(state) = device.state.door_state {
-                    println!("{}: {} ({})", device.name, state, device.state.last_status.unwrap_or_else(||"??".into()));
-                }
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(30)).await;
-    }
+    });
+    actor.run().await.unwrap();
 }
