@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
-    time::{Duration, Instant, SystemTime}, str::FromStr,
+    str::FromStr,
+    time::{Duration, Instant, SystemTime},
 };
 
 use reqwest::{
@@ -91,6 +92,7 @@ impl DeviceType {
     }
 }
 
+#[derive(Clone)]
 pub struct DeviceStateHandle(mpsc::Sender<Request>);
 
 pub enum Request {
@@ -234,14 +236,19 @@ impl DeviceStateActor {
                     device.serial_number,
                     to_send.lower_str()
                 );
-                let resp = self.client
+                let resp = self
+                    .client
                     .put(&url)
                     .bearer_auth(&self.token.access_token)
                     .header("content-length", "0")
                     .send()
                     .await?;
                 if !resp.status().is_success() {
-                    log::error!("Error changing state {} {}", resp.status(), resp.text().await.unwrap());
+                    log::error!(
+                        "Error changing state {} {}",
+                        resp.status(),
+                        resp.text().await.unwrap()
+                    );
                 }
             }
         }
@@ -793,7 +800,7 @@ impl FromStr for LampState {
         let ret = match s.trim().to_lowercase().as_str() {
             "on" => Self::On,
             "off" => Self::Off,
-            _ => return Err(Error::UnknownState(s.into()))
+            _ => return Err(Error::UnknownState(s.into())),
         };
         Ok(ret)
     }
@@ -814,7 +821,7 @@ impl FromStr for GarageDoorState {
         let ret = match s.trim().to_lowercase().as_str() {
             "open" | "opened" | "opening" => Self::Open,
             "close" | "closed" | "closing" => Self::Closed,
-            _ => return Err(Error::UnknownState(s.to_string()))
+            _ => return Err(Error::UnknownState(s.to_string())),
         };
         return Ok(ret);
     }

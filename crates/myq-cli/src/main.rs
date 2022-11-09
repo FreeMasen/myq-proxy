@@ -1,8 +1,11 @@
-use std::{time::Duration, path::{Path, PathBuf}};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
+use clap::{Parser, Subcommand};
 use myq_proxy::{Config, DeviceStateActor, DeviceStateHandle, GarageDoorState, LampState};
 use serde_json::Value;
-use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -11,7 +14,7 @@ struct Args {
     #[arg(short, long)]
     config: PathBuf,
     #[command(subcommand)]
-    command: Command
+    command: Command,
 }
 
 #[derive(Subcommand, Debug)]
@@ -36,7 +39,7 @@ pub enum Command {
         id: String,
         /// The desired state
         target: LampState,
-    }
+    },
 }
 
 #[tokio::main]
@@ -70,7 +73,14 @@ async fn get_devices(handle: DeviceStateHandle, table: bool) {
         let mut t = comfy_table::Table::new();
         t.set_header(vec!["Device Name", "Device ID", "Device State"]);
         for device in devices {
-            t.add_row(vec![device.name.as_str(), device.serial_number.as_str(), device.get_type_state().map(|s| s.lower_str()).unwrap_or("unknown")]);
+            t.add_row(vec![
+                device.name.as_str(),
+                device.serial_number.as_str(),
+                device
+                    .get_type_state()
+                    .map(|s| s.lower_str())
+                    .unwrap_or("unknown"),
+            ]);
         }
         println!("{t}");
     } else {
@@ -84,11 +94,14 @@ async fn garage_command(handle: DeviceStateHandle, id: String, cmd: GarageDoorSt
         Some(device) => device,
         None => std::process::exit(1),
     };
-    if device.get_type_state().map(|state|  state.lower_str() == cmd.lower_str()).unwrap_or_default() {
-        return
+    if device
+        .get_type_state()
+        .map(|state| state.lower_str() == cmd.lower_str())
+        .unwrap_or_default()
+    {
+        return;
     }
     handle.toggle_device(id).await.unwrap();
-
 }
 
 async fn lamp_command(handle: DeviceStateHandle, id: String, cmd: LampState) {
@@ -97,11 +110,14 @@ async fn lamp_command(handle: DeviceStateHandle, id: String, cmd: LampState) {
         Some(device) => device,
         None => std::process::exit(1),
     };
-    if device.get_type_state().map(|state|  state.lower_str() == cmd.lower_str()).unwrap_or_default() {
-        return
+    if device
+        .get_type_state()
+        .map(|state| state.lower_str() == cmd.lower_str())
+        .unwrap_or_default()
+    {
+        return;
     }
     handle.toggle_device(id).await.unwrap();
-
 }
 
 async fn read_config(path: impl AsRef<Path>) -> Result<Config, std::io::Error> {
