@@ -105,7 +105,8 @@ impl DeviceStateActor {
     pub fn new(config: Config) -> (Self, DeviceStateHandle) {
         let (tx, rx) = mpsc::channel(512);
         let handle = DeviceStateHandle(tx);
-        let (tx, _) = broadcast::channel(512);
+        let (tx, _rx) = broadcast::channel(512);
+        std::mem::forget(_rx);
         let ret = Self {
             client: Client::default(),
             config,
@@ -137,11 +138,10 @@ impl DeviceStateActor {
 
     pub async fn run(mut self) -> Result {
         self.init_token().await?;
-        loop {
-            while let Some(request) = self.rx.recv().await {
-                self.process_request(request).await;
-            }
+        while let Some(request) = self.rx.recv().await {
+            self.process_request(request).await;
         }
+        Ok(())
     }
 
     async fn process_request(&mut self, request: Request) {
@@ -676,7 +676,7 @@ pub struct Device {
 }
 
 impl Device {
-    fn get_type_state(&self) -> Option<DeviceType> {
+    pub fn get_type_state(&self) -> Option<DeviceType> {
         let ret = if self.device_family.contains("garagedoor") {
             DeviceType::GarageDoor(self.state.door_state?)
         } else if self.device_family.contains("lamp") {
@@ -778,7 +778,7 @@ pub enum LampState {
 }
 
 impl LampState {
-    fn lower_str(&self) -> &'static str {
+    pub fn lower_str(&self) -> &'static str {
         match self {
             Self::On => "on",
             Self::Off => "off",
