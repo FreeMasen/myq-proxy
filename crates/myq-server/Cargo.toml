@@ -13,5 +13,6 @@ log = { workspace = true }
 myq-proxy = { path = "../../" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+socket2 = "0.4"
 tokio = { workspace = true }
 warp = "0.3"

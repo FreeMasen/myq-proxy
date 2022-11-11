@@ -8,6 +8,8 @@ use warp::{
     Filter,
 };
 
+mod discovery;
+
 #[tokio::main]
 async fn main() {
     let config_dir = dirs::config_dir().unwrap_or_else(|| {
