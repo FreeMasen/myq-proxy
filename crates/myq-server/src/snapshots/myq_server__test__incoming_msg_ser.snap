@@ -1,0 +1,18 @@
+---
+source: crates/myq-server/src/main.rs
+expression: incoming
+---
+[
+  {
+    "type": "GetDevices"
+  },
+  {
+    "type": "GetDevice",
+    "device_id": ""
+  },
+  {
+    "type": "ExecuteCommand",
+    "device_id": "",
+    "command": "Close"
+  }
+]

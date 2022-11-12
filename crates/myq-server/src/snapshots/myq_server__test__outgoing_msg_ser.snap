@@ -1,0 +1,84 @@
+---
+source: crates/myq-server/src/main.rs
+expression: outgoing
+---
+[
+  {
+    "type": "GetDevices",
+    "devices": []
+  },
+  {
+    "type": "GetDevice",
+    "device": {
+      "account_id": "00000000-0000-0000-0000-000000000000",
+      "created_date": null,
+      "device_family": "",
+      "device_model": "",
+      "device_platform": "",
+      "device_type": "",
+      "href": "",
+      "name": "",
+      "parent_device_id": "",
+      "serial_number": "",
+      "state": {
+        "attached_work_light_error_present": false,
+        "aux_relay_behavior": null,
+        "aux_relay_delay": null,
+        "close": null,
+        "command_channel_report_status": false,
+        "control_from_browser": false,
+        "door_ajar_interval": null,
+        "door_state": "closed",
+        "dps_low_battery_mode": false,
+        "firmware_version": null,
+        "gdo_lock_connected": false,
+        "homekit_capable": false,
+        "homekit_enabled": false,
+        "invalid_credential_window": null,
+        "invalid_shutout_period": null,
+        "is_unattended_close_allowed": false,
+        "is_unattended_open_allowed": false,
+        "lamp_state": "off",
+        "lamp_subtype": null,
+        "last_event": null,
+        "last_status": null,
+        "last_update": null,
+        "learn": null,
+        "learn_mode": false,
+        "light_state": null,
+        "links": null,
+        "max_invalid_attempts": 0,
+        "online": false,
+        "online_change_time": null,
+        "open": null,
+        "passthrough_interval": null,
+        "pending_bootload_abandoned": false,
+        "physical_devices": [],
+        "report_ajar": false,
+        "report_forced": false,
+        "rex_fires_door": false,
+        "servers": null,
+        "updated_date": null,
+        "use_aux_relay": false
+      }
+    }
+  },
+  {
+    "type": "StateChange",
+    "change": {
+      "kind": "deviceAdded",
+      "device_id": "",
+      "device_type": {
+        "kind": "garageDoor",
+        "state": "closed"
+      }
+    }
+  },
+  {
+    "type": "Success"
+  },
+  {
+    "type": "Error",
+    "err": ""
+  }
+]
