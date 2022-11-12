@@ -15,6 +15,8 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use uuid::Uuid;
 
+mod urls;
+
 type Result<T = ()> = std::result::Result<T, Error>;
 type Reply<T> = oneshot::Sender<Result<T>>;
 
@@ -76,13 +78,8 @@ impl DeviceType {
             Self::GarageDoor(state) => state.lower_str(),
         }
     }
-    pub fn url_base(&self) -> &'static str {
-        match self {
-            DeviceType::Lamp(_) => "https://account-devices-lamp.myq-cloud.com/api/v5.2/Accounts",
-            DeviceType::GarageDoor(_) => {
-                "https://account-devices-gdo.myq-cloud.com/api/v5.2/Accounts"
-            }
-        }
+    pub fn url_base(&self) -> String {
+        urls::device_url_base(self)
     }
     pub fn url_segment(&self) -> &'static str {
         match self {
@@ -359,7 +356,6 @@ pub async fn login(client: &Client, config: &Config) -> Result<LongLivedToken> {
 }
 
 async fn get_oauth_page(code_challenge: String) -> Result<Response> {
-    const URL: &str = "https://partner-identity.myq-cloud.com/connect/authorize";
     let client = Client::builder().build().unwrap();
     let search_params = serde_json::json!({
         "client_id": CLIENT_ID,
@@ -369,9 +365,10 @@ async fn get_oauth_page(code_challenge: String) -> Result<Response> {
         "response_type": "code",
         "scope": "MyQ_Residential offline_access",
     });
-
+    let url = urls::authorize_url();
+    log::debug!("Requesting {url}");
     let req = client
-        .get(URL)
+        .get(url)
         .query(&search_params)
         .header(
             "user-agent",
@@ -380,7 +377,7 @@ async fn get_oauth_page(code_challenge: String) -> Result<Response> {
         .build()
         .unwrap();
 
-    let res = client.execute(req).await?;
+    let res = client.execute(req).await?.error_for_status()?;
     Ok(res)
 }
 
@@ -412,7 +409,8 @@ pub async fn oauth_redirect(login_response: Response) -> Result<Response> {
 pub async fn oauth_login(auth_page: Response, config: &Config) -> Result<Response> {
     let cookie = trim_cookies(auth_page.headers());
 
-    let auth_page_url = auth_page.url().clone();
+    let mut auth_page_url = auth_page.url().clone();
+    auth_page_url.set_query(None);
     let html_text = auth_page.text().await?;
     let login_page_html = scraper::Html::parse_document(&html_text);
     let input = login_page_html
@@ -442,13 +440,12 @@ pub async fn oauth_login(auth_page: Response, config: &Config) -> Result<Respons
 
     assert!(
         res.headers().get_all("set-cookie").iter().count() >= 2,
-        "Not enough cookies"
+        "Not enough cookies {:#?}", res.headers().get_all("set-cookie").iter().collect::<Vec<_>>()
     );
     Ok(res)
 }
 
 pub async fn get_oauth_token(client: &Client, config: &Config) -> Result<LongLivedToken> {
-    const URL: &str = "https://partner-identity.myq-cloud.com/connect/token";
     let code_verify = pkce::code_verifier(43);
     let code_challenge = pkce::code_challenge(&code_verify);
     let oauth_page = get_oauth_page(code_challenge).await?;
@@ -468,7 +465,7 @@ pub async fn get_oauth_token(client: &Client, config: &Config) -> Result<LongLiv
         "redirect_uri": REDIRECT_URI
     });
     let req = client
-        .post(URL)
+        .post(urls::token_url())
         .form(&request_body)
         .header(
             "user-agent",
@@ -490,7 +487,7 @@ pub async fn get_oauth_token(client: &Client, config: &Config) -> Result<LongLiv
 pub async fn refresh_token(existing: &LongLivedToken, client: &Client) -> Result<LongLivedToken> {
     let body = existing.get_refresh_body();
     let res: RawToken = client
-        .post("https://partner-identity.myq-cloud.com/connect/token")
+        .post(urls::token_url())
         .form(&body)
         .header(
             "user-agent",
@@ -513,9 +510,8 @@ pub async fn refresh_token(existing: &LongLivedToken, client: &Client) -> Result
 
 pub async fn get_accounts(client: &Client, token: &LongLivedToken) -> Result<AccountList> {
     log::trace!("get_accounts");
-    const URL: &str = "https://accounts.myq-cloud.com/api/v6.0/accounts";
     let list = client
-        .get(URL)
+        .get(urls::accounts_url())
         .bearer_auth(&token.access_token)
         .send()
         .await
@@ -542,10 +538,7 @@ pub async fn get_devices(
     log::trace!("get_devices");
     let mut ret = HashMap::new();
     for acct in &accounts.accounts {
-        let url = format!(
-            "https://devices.myq-cloud.com/api/v5.2/Accounts/{}/Devices",
-            acct.id
-        );
+        let url = urls::devices_url(&acct.id);
         let res: DeviceList = client
             .get(url)
             .bearer_auth(&token.access_token)
@@ -577,7 +570,7 @@ pub struct Config {
     state_refresh_s: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawToken {
     pub access_token: String,
     pub expires_in: f64,
@@ -628,12 +621,12 @@ impl LongLivedToken {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AccountList {
     pub accounts: Vec<Account>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Account {
     pub created_by: String,
     pub id: String,
@@ -641,13 +634,13 @@ pub struct Account {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MaxUsers {
     pub co_owner: u64,
     pub guest: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DeviceList {
     #[serde(default)]
     pub count: usize,
@@ -862,4 +855,154 @@ pub enum Error {
     UnknownDevice(String),
     #[error("Unknown State: {0}")]
     UnknownState(String),
+}
+
+/// This sets up all required endpoints except for the command execution endpoints
+/// the provided devices watch::Receiver will be used to generate the body of the
+/// get-devices endpoint
+/// 
+/// Because the command endpoints are too complicated to mock generally, those are
+/// left to the test to define.
+/// 
+/// All login mocks should mirror the myq oauth login process
+/// 
+/// The account id used here is "test-id"
+/// 
+/// create has already been called by all mocks returned here but are returned to avoid
+/// dropping them before they can be used
+#[cfg(any(test, feature = "mockito-urls"))]
+pub fn setup_all_mocks(
+    devices: tokio::sync::watch::Receiver<DeviceList>,
+) -> Vec<mockito::Mock> {
+    use mockito::Matcher;
+    let mut ret = vec![];
+    //get_oauth_page
+    ret.push(
+        mockito::mock("GET", "/authorize")
+            .match_query(Matcher::AllOf(vec![
+                Matcher::UrlEncoded("client_id".into(), CLIENT_ID.into()),
+                Matcher::UrlEncoded("code_challenge_method".into(), "S256".into()),
+                Matcher::UrlEncoded("redirect_uri".into(), REDIRECT_URI.into()),
+                Matcher::UrlEncoded("response_type".into(), "code".into()),
+                Matcher::UrlEncoded("scope".into(), "MyQ_Residential offline_access".into()),
+                // skipping challenge code because it should change each use
+            ]))
+            .with_header("set-cookie", "cookie number 1; cookie number 2")
+            .with_header("set-cookie", "cookie number 3; cookie number 4")
+            .with_status(200)
+            .with_body(r#"<html><body><input name="__RequestVerificationToken" value="token" /></body></html>"#).create()
+    );
+    // oauth_login
+    ret.push(
+        mockito::mock("POST", "/authorize")
+            // .match_header(
+            //     "cookie",
+            //     Matcher::Exact("cookie number 1; cookie number 3".into()),
+            // )
+            .with_header("set-cookie", "cookie number 1; cookie number 2")
+            .with_header("set-cookie", "cookie number 3; cookie number 4")
+            .with_header("location", "/oauth_redirect")
+            .with_status(200)
+            .with_body_from_fn(|w| {
+                eprintln!("POST authorize");
+                w.write_all(b"")
+            })
+            .create(),
+    );
+    let mut redirect_url: Url = mockito::server_url().parse().unwrap();
+    let query = serde_json::json!({
+        "code": base64::encode("mock-code"),
+        "scope": "mock-scope"
+    });
+    let query = serde_urlencoded::to_string(&query).unwrap();
+    redirect_url.set_query(Some(&query));
+    // oauth_redirect
+    ret.push(
+        mockito::mock("GET", "/oauth_redirect")
+            .match_header(
+                "cookie",
+                Matcher::Exact("cookie number 1; cookie number 3".into()),
+            )
+            .with_header("location", &redirect_url.to_string())
+            .with_body_from_fn(|w| {
+                eprintln!("oauth_redirect");
+                w.write_all(b"")
+            })
+            .create(),
+    );
+    // final
+    let token_body = serde_json::to_string(&RawToken {
+        access_token: "test-access-token".into(),
+        expires_in: 60.0 * 60.0 * 24.0 * 365.0,
+        refresh_token: "test-refresh-token".into(),
+        scope: "test-scope".into(),
+        token_type: "Bearer".into(),
+    })
+    .unwrap();
+    ret.push(
+        mockito::mock("POST", "/token")
+            .with_status(200)
+            .with_body(&token_body)
+            .create(),
+    );
+    // get accounts
+    let accounts = AccountList {
+        accounts: vec![Account {
+            created_by: String::new(),
+            id: "test-id".into(),
+            max_users: MaxUsers {
+                co_owner: 100,
+                guest: 100,
+            },
+            name: "test-account".into(),
+        }],
+    };
+    let accounts_body = serde_json::to_string(&accounts).unwrap();
+    ret.push(
+        mockito::mock("GET", "/accounts")
+            .match_header("authorization", "Bearer test-token")
+            .with_body(&accounts_body)
+            .create(),
+    );
+    // devices
+    ret.push(
+        mockito::mock("GET", "/Accounts/test-id/Devices")
+            .match_header("authorization", "Bearer test-token")
+            .with_body_from_fn(move |w| {
+                let body = serde_json::to_string(&*devices.borrow()).unwrap();
+                w.write_all(body.as_bytes())
+            })
+            .create(),
+    );
+    ret
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use tokio::sync::watch;
+
+    use crate::setup_all_mocks;
+
+    #[tokio::test]
+    async fn get_devices() {
+        env_logger::builder().is_test(true).try_init().ok();
+        let (_tx, devices) = watch::channel(DeviceList {
+            count: 0,
+            href: None,
+            items: vec![]
+        });
+        let _mocks = setup_all_mocks(devices);
+        let (actor, handle) = DeviceStateActor::new(Config {
+            username: String::new(),
+            password: String::new(),
+            state_refresh_s: None
+        });
+        let test_task = tokio::task::spawn(async move {
+            handle.get_devices().await.unwrap();
+        });
+        let (run_task, test_task) = tokio::join!(actor.run(), test_task);
+        run_task.unwrap();
+        test_task.unwrap();
+    }
 }
