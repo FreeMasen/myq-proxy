@@ -71,10 +71,16 @@ async fn get_devices(handle: DeviceStateHandle, table: bool) {
     let devices = handle.get_devices().await.unwrap();
     if table {
         let mut t = comfy_table::Table::new();
-        t.set_header(vec!["Device Name", "Device ID", "Device State"]);
+        t.set_header(vec![
+            "Device Name",
+            "Device Type",
+            "Device ID",
+            "Device State",
+        ]);
         for device in devices {
             t.add_row(vec![
                 device.name.as_str(),
+                device.device_type.as_str(),
                 device.serial_number.as_str(),
                 device
                     .get_type_state()
