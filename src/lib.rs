@@ -100,6 +100,18 @@ pub enum Request {
     ToggleDevice(String, Reply<()>),
 }
 
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::GetAllDevices(_) => f.debug_tuple("GetAllDevices").finish(),
+            Self::GetDevice(arg0, _) => f.debug_tuple("GetDevice").field(arg0).finish(),
+            Self::ForceRefresh(_) => f.debug_tuple("ForceRefresh").finish(),
+            Self::Subscribe(_) => f.debug_tuple("Subscribe").finish(),
+            Self::ToggleDevice(arg0, _) => f.debug_tuple("ToggleDevice").field(arg0).finish(),
+        }
+    }
+}
+
 impl DeviceStateActor {
     pub fn new(config: Config) -> (Self, DeviceStateHandle) {
         let (tx, rx) = mpsc::channel(512);
@@ -127,7 +139,9 @@ impl DeviceStateActor {
     pub fn spawn_refresh_task(tx: mpsc::Sender<Request>, interval: Duration) {
         tokio::task::spawn(async move {
             loop {
+                log::trace!("refresh loop top");
                 tokio::time::sleep(interval).await;
+                log::trace!("refresh loop wake-up");
                 let (s, r) = oneshot::channel();
                 tx.send(Request::ForceRefresh(s)).await.ok();
                 r.await.ok();
@@ -138,6 +152,7 @@ impl DeviceStateActor {
     pub async fn run(mut self) -> Result {
         self.init_token().await?;
         while let Some(request) = self.rx.recv().await {
+            log::trace!("actor request: {request:?}");
             self.process_request(request).await;
         }
         Ok(())
@@ -408,9 +423,11 @@ pub async fn oauth_redirect(login_response: Response) -> Result<Response> {
 
 pub async fn oauth_login(auth_page: Response, config: &Config) -> Result<Response> {
     let cookie = trim_cookies(auth_page.headers());
-
+    #[allow(unused_mut)]
     let mut auth_page_url = auth_page.url().clone();
-    auth_page_url.set_query(None);
+    if cfg!(any(test, feature = "mockito-urls")) {
+        auth_page_url.set_query(None);
+    }
     let html_text = auth_page.text().await?;
     let login_page_html = scraper::Html::parse_document(&html_text);
     let input = login_page_html
@@ -440,7 +457,11 @@ pub async fn oauth_login(auth_page: Response, config: &Config) -> Result<Respons
 
     assert!(
         res.headers().get_all("set-cookie").iter().count() >= 2,
-        "Not enough cookies {:#?}", res.headers().get_all("set-cookie").iter().collect::<Vec<_>>()
+        "Not enough cookies {:#?}",
+        res.headers()
+            .get_all("set-cookie")
+            .iter()
+            .collect::<Vec<_>>()
     );
     Ok(res)
 }
@@ -564,10 +585,10 @@ pub async fn get_devices(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Config {
-    username: String,
-    password: String,
+    pub username: String,
+    pub password: String,
     #[serde(default)]
-    state_refresh_s: Option<u64>,
+    pub state_refresh_s: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -860,20 +881,18 @@ pub enum Error {
 /// This sets up all required endpoints except for the command execution endpoints
 /// the provided devices watch::Receiver will be used to generate the body of the
 /// get-devices endpoint
-/// 
+///
 /// Because the command endpoints are too complicated to mock generally, those are
 /// left to the test to define.
-/// 
+///
 /// All login mocks should mirror the myq oauth login process
-/// 
+///
 /// The account id used here is "test-id"
-/// 
+///
 /// create has already been called by all mocks returned here but are returned to avoid
 /// dropping them before they can be used
 #[cfg(any(test, feature = "mockito-urls"))]
-pub fn setup_all_mocks(
-    devices: tokio::sync::watch::Receiver<DeviceList>,
-) -> Vec<mockito::Mock> {
+pub fn setup_all_mocks(devices: tokio::sync::watch::Receiver<DeviceList>) -> Vec<mockito::Mock> {
     use mockito::Matcher;
     let mut ret = vec![];
     //get_oauth_page
@@ -990,13 +1009,13 @@ mod test {
         let (_tx, devices) = watch::channel(DeviceList {
             count: 0,
             href: None,
-            items: vec![]
+            items: vec![],
         });
         let _mocks = setup_all_mocks(devices);
         let (actor, handle) = DeviceStateActor::new(Config {
             username: String::new(),
             password: String::new(),
-            state_refresh_s: None
+            state_refresh_s: None,
         });
         let test_task = tokio::task::spawn(async move {
             handle.get_devices().await.unwrap();

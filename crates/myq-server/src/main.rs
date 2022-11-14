@@ -1,4 +1,4 @@
-use std::{convert::Infallible, fs::File, net::IpAddr};
+use std::{convert::Infallible, fs::File, net::IpAddr, time::Duration};
 
 use futures_util::{
     stream::{SplitSink, SplitStream},
@@ -13,7 +13,6 @@ use socket2::Socket;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use warp::{
     hyper::StatusCode,
-    reply::Response,
     ws::{Message, WebSocket, Ws},
     Filter, Reply,
 };
@@ -34,7 +33,9 @@ async fn main() {
     }
     let mut f = File::open(&config_file_path).unwrap();
     let config: Config = serde_json::from_reader(&mut f).unwrap();
+    let interval = Duration::from_secs(config.state_refresh_s.unwrap_or(5));
     let (actor, handle) = DeviceStateActor::new(config);
+    handle.spawn_refresh_task(interval);
     let with_handle = warp::any().map(move || handle.clone());
     let event_stream = warp::path("event-stream")
         .and(warp::ws())
@@ -79,8 +80,8 @@ async fn main() {
 async fn on_ws_upgrade(sock: WebSocket, handle: DeviceStateHandle) {
     let (tx, rx) = sock.split();
     let tx = wrap_ws_in_ch(tx);
+    forward_event_stream(handle.clone(), tx.clone());
     wrap_receiver(rx, tx.clone(), handle.clone());
-    forward_event_stream(handle, tx);
 }
 
 /// Forward all message through an UnboundedReceiver to allow for cloning the tx into
@@ -103,6 +104,7 @@ fn wrap_receiver(
 ) {
     tokio::task::spawn(async move {
         while let Some(msg) = rx.next().await {
+            log::debug!("incoming message: {msg:?}");
             let msg = process_incoming(msg, &handle).await.unwrap_or_else(|e| e);
             tx.send(msg)
                 .map_err(|e| log::error!("Error sending to wrapped ws: {e:?}"))
@@ -115,7 +117,6 @@ async fn process_incoming(
     incoming: Result<Message, warp::Error>,
     handle: &DeviceStateHandle,
 ) -> Result<OutgoingMsg, OutgoingMsg> {
-    log::trace!("incoming msg: {incoming:?}");
     let msg = incoming.map_err(|e| {
         log::error!("received error {e}");
         e
@@ -138,17 +139,21 @@ async fn process_incoming_message(msg: IncomingMsg, handle: &DeviceStateHandle) 
 }
 
 fn forward_event_stream(handle: DeviceStateHandle, tx: UnboundedSender<OutgoingMsg>) {
+    log::trace!("forward_event_stream");
     tokio::task::spawn(async move {
+        log::trace!("subscribing");
         if let Ok(mut rx) = handle
             .subscribe()
             .await
             .map_err(|e| log::error!("Error subscribing: {e}"))
         {
+            log::debug!("subscribed to event stream");
             while let Ok(msg) = rx
                 .recv()
                 .await
                 .map_err(|e| log::error!("error receiving {e}"))
             {
+                log::debug!("outgoing message: {msg:?}");
                 tx.send(OutgoingMsg::StateChange { change: msg })
                     .map_err(|e| {
                         log::error!("Error sending msg: {e}");
@@ -163,7 +168,10 @@ async fn get_devices(handle: &DeviceStateHandle) -> OutgoingMsg {
     handle
         .get_devices()
         .await
-        .map(|devices| OutgoingMsg::GetDevices { devices })
+        .map(|devices| {
+            log::debug!("Got devices: {devices:?}");
+            OutgoingMsg::GetDevices { devices }
+        })
         .unwrap_or_else(|e| OutgoingMsg::Error {
             err: format!("{e}"),
         })
